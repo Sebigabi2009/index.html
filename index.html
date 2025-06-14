@@ -1,0 +1,224 @@
+
+<!DOCTYPE html>
+<html lang="ro">
+<head>
+  <meta charset="UTF-8">
+  <title>HMI Parc Fotovoltaic</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      background: #eef2f7;
+      margin: 0;
+      padding: 20px;
+    }
+    .grid {
+      display: grid;
+      gap: 20px;
+      grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
+    }
+    .card {
+      background: white;
+      border-radius: 16px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+      padding: 20px;
+    }
+    .card h3 { margin-top: 0; }
+    .btn {
+      background: #007bff;
+      color: white;
+      border: none;
+      padding: 8px 16px;
+      border-radius: 8px;
+      cursor: pointer;
+      margin: 10px 0;
+    }
+    .btn:hover { background: #0056b3; }
+    .indicator {
+      display: inline-block;
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      margin-right: 6px;
+    }
+    .green { background: #28a745; }
+    .red { background: #dc3545; }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 14px;
+    }
+    th, td {
+      padding: 8px;
+      border-bottom: 1px solid #ccc;
+    }
+    canvas {
+      width: 100% !important;
+      height: 200px !important;
+    }
+    .small { font-size: 13px; color: #555; }
+  </style>
+</head>
+<body>
+  <h1>HMI - Parc Fotovoltaic</h1>
+  <button class="btn" onclick="resetData()">🔄 Resetare Date</button>
+
+  <div class="grid">
+    <div class="card">
+      <h3>Producție Totală</h3>
+      <p><strong><span id="totalPower">0</span> kWh</strong></p>
+      <p class="small">Actualizat automat la fiecare 2 secunde</p>
+    </div>
+    <div class="card">
+      <h3>Alarme Active</h3>
+      <ul id="alarms">
+        <li>Nicio alarmă activă</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3>Log Evenimente</h3>
+      <ul id="log" class="small" style="max-height: 150px; overflow-y: auto;"></ul>
+    </div>
+  </div>
+
+  <hr style="margin: 40px 0;">
+
+  <div class="grid" id="inverterGrid"></div>
+
+  <script>
+    const totalPowerEl = document.getElementById('totalPower');
+    const alarmsEl = document.getElementById('alarms');
+    const logEl = document.getElementById('log');
+    const inverterGrid = document.getElementById('inverterGrid');
+
+    const storedData = JSON.parse(localStorage.getItem('solarHMIData')) || {
+      totalPower: 0,
+      invertoare: [
+        { id: 1, nume: "Invertor #1", pornit: false, tensiuni: [], timp: [] },
+        { id: 2, nume: "Invertor #2", pornit: false, tensiuni: [], timp: [] },
+        { id: 3, nume: "Invertor #3", pornit: false, tensiuni: [], timp: [] },
+        { id: 4, nume: "Invertor #4", pornit: false, tensiuni: [], timp: [] },
+        { id: 5, nume: "Invertor #5", pornit: false, tensiuni: [], timp: [] },
+        { id: 6, nume: "Invertor #6", pornit: false, tensiuni: [], timp: [] },
+        { id: 7, nume: "Invertor #7", pornit: false, tensiuni: [], timp: [] },
+        { id: 8, nume: "Invertor #8", pornit: false, tensiuni: [], timp: [] }
+      ],
+      log: []
+    };
+
+    let totalPower = storedData.totalPower;
+    const invertoare = storedData.invertoare;
+    const logEvents = storedData.log;
+
+    function createInverterCard(invertor) {
+      const card = document.createElement("div");
+      card.className = "card";
+      card.innerHTML = `
+        <h3>${invertor.nume}</h3>
+        <p>Status: <span class="indicator ${invertor.pornit ? 'green' : 'red'}" id="status-${invertor.id}"></span>
+        <span id="status-text-${invertor.id}">${invertor.pornit ? 'PORNIT' : 'OPRIT'}</span></p>
+        <p>Tensiune: <span id="v-${invertor.id}">0</span> V</p>
+        <p>Curent: <span id="c-${invertor.id}">0</span> A</p>
+        <button class="btn" onclick="toggleInvertor(${invertor.id})">Pornire / Oprire</button>
+        <canvas id="chart-${invertor.id}"></canvas>
+      `;
+      inverterGrid.appendChild(card);
+
+      const ctx = document.getElementById(`chart-${invertor.id}`).getContext("2d");
+      invertor.grafic = new Chart(ctx, {
+        type: "line",
+        data: {
+          labels: invertor.timp,
+          datasets: [{
+            label: "Tensiune (V)",
+            data: invertor.tensiuni,
+            borderColor: "#007bff",
+            borderWidth: 2,
+            fill: false,
+            tension: 0.3
+          }]
+        },
+        options: {
+          responsive: true,
+          scales: { y: { beginAtZero: true, max: 1000 } }
+        }
+      });
+    }
+
+    function toggleInvertor(id) {
+      const inv = invertoare.find(i => i.id === id);
+      inv.pornit = !inv.pornit;
+      document.getElementById(`status-${id}`).className = `indicator ${inv.pornit ? 'green' : 'red'}`;
+      document.getElementById(`status-text-${id}`).innerText = inv.pornit ? 'PORNIT' : 'OPRIT';
+      logEvent(`${inv.nume} ${inv.pornit ? 'pornit' : 'oprit'}`);
+      saveToLocalStorage();
+    }
+
+    function updateInvertoare() {
+      invertoare.forEach(inv => {
+        const v = inv.pornit ? +(Math.random() * 300 + 400).toFixed(1) : 0;
+        const c = inv.pornit ? +(Math.random() * 10 + 5).toFixed(1) : 0;
+
+        document.getElementById(`v-${inv.id}`).innerText = v;
+        document.getElementById(`c-${inv.id}`).innerText = c;
+
+        if (inv.timp.length >= 15) {
+          inv.timp.shift();
+          inv.tensiuni.shift();
+        }
+
+        inv.timp.push(new Date().toLocaleTimeString());
+        inv.tensiuni.push(v);
+        inv.grafic.update();
+
+        if (inv.pornit) {
+          totalPower += v * c / 1000;
+        }
+      });
+
+      totalPowerEl.innerText = totalPower.toFixed(1);
+      saveToLocalStorage();
+    }
+
+    function logEvent(msg) {
+      const li = document.createElement("li");
+      li.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
+      logEl.prepend(li);
+      if (logEvents.length >= 20) logEvents.pop();
+      logEvents.unshift(`[${new Date().toLocaleTimeString()}] ${msg}`);
+    }
+
+    function simulateAlarms() {
+      const simulated = [];
+      invertoare.forEach(inv => {
+        if (inv.pornit && Math.random() < 0.2) {
+          simulated.push(`${inv.nume}: Tensiune scăzută`);
+        }
+      });
+      alarmsEl.innerHTML = simulated.length > 0
+        ? simulated.map(a => `<li>${a}</li>`).join("")
+        : "<li>Nicio alarmă activă</li>";
+    }
+
+    function saveToLocalStorage() {
+      const dataToSave = {
+        totalPower,
+        invertoare,
+        log: logEvents
+      };
+      localStorage.setItem('solarHMIData', JSON.stringify(dataToSave));
+    }
+
+    function resetData() {
+      if (confirm("Ești sigur că vrei să resetezi toate datele?")) {
+        localStorage.removeItem('solarHMIData');
+        location.reload();
+      }
+    }
+
+    invertoare.forEach(createInverterCard);
+    setInterval(updateInvertoare, 2000);
+    setInterval(simulateAlarms, 5000);
+  </script>
+</body>
+</html>
